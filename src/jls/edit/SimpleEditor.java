@@ -5417,6 +5417,7 @@ public abstract class SimpleEditor extends JPanel {
 
 							// put into circuit
 							Point pos = getMousePosition();
+							System.err.println("DEBUG palette drop: getMousePosition() = " + pos); // TODO remove
 							if (pos == null) {
 
 								// add to circuit and selected set
@@ -5432,6 +5433,12 @@ public abstract class SimpleEditor extends JPanel {
 								pos = viewport.toModel(pos);
 								x = pos.x;
 								y = pos.y;
+								// move the element to the pointer, as the
+								// chosen-state mouseMoved does; otherwise it
+								// stays at the drop point and keeps that
+								// offset from the pointer while placing
+								autoGrow(x,y);
+								item.setXY(x,y);
 								item.savePosition();
 
 								// add to circuit and selected set
