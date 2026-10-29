@@ -353,11 +353,17 @@ public class JLSStart extends JFrame implements ChangeListener {
 			Circuit drawn = circ;
 			final String path = imageCircuit;
 			if (path != null) {
-				final Circuit found = subcircuitAt(circ, path);
+				final List<String> names = parseName(path);
+				if (names == null) {
+					// unreachable: apply() rejected a malformed path
+					throw new IllegalStateException(
+							"unvalidated -circuit path " + path);
+				}
+				final Circuit found = circ.getSubCircuit(names);
 				if (found == null) {
 					System.err.println("jls: error: " + startFile
 							+ " has no subcircuit " + path + "; "
-							+ subcircuitListing(circ, path));
+							+ subcircuitListing(circ, names));
 					System.exit(1);
 					return;
 				}
@@ -3074,60 +3080,6 @@ public class JLSStart extends JFrame implements ChangeListener {
 	} // end of exportImage method
 
 	/**
-	 * The subcircuit at a dotted path of subcircuit names below a
-	 * circuit, e.g. "alu.adder" is subcircuit adder inside subcircuit
-	 * alu. Names are those of the SubCircuit elements, which loading
-	 * sets to the nested circuits' names. The editor keeps them unique
-	 * within a circuit; a repeat in a hand-edited file resolves as
-	 * {@link #childSubcircuit} describes.
-	 *
-	 * @param top The circuit the path starts from.
-	 * @param path The dotted path of subcircuit names.
-	 *
-	 * @return the subcircuit, or null if the path is malformed or
-	 *         names no subcircuit.
-	 *
-	 * @jls.testedby jls.CliImageExportTest#circuitOptionDrawsOnlyTheNamedLevel()
-	 * @jls.testedby jls.CliImageExportTest#circuitOptionFollowsADottedPathIntoNestedSubcircuits()
-	 * @jls.testedby jls.CliImageExportTest#circuitOptionNamingNoSubcircuitIsARuntimeError()
-	 */
-	static @Nullable Circuit subcircuitAt(Circuit top, String path) {
-
-		final Vector<String> names = parseName(path);
-		if (names == null)
-			return null;
-		Circuit circ = top;
-		for (String step : names) {
-			final Circuit next = childSubcircuit(circ, step);
-			if (next == null)
-				return null;
-			circ = next;
-		}
-		return circ;
-	} // end of subcircuitAt method
-
-	/**
-	 * The subcircuit with a given name directly inside a circuit: the
-	 * first in stable element order, so a repeated name (possible only
-	 * in a hand-edited file) resolves deterministically.
-	 *
-	 * @param circ The circuit to look in.
-	 * @param name The subcircuit name.
-	 *
-	 * @return the subcircuit, or null if circ has none by that name.
-	 */
-	private static @Nullable Circuit childSubcircuit(Circuit circ,
-			String name) {
-
-		for (Element el : circ.getElementsInStableOrder()) {
-			if (el instanceof SubCircuit sub && name.equals(sub.getName())) {
-				return sub.getSubCircuit();
-			}
-		}
-		return null;
-	} // end of childSubcircuit method
-
-	/**
 	 * Describe the subcircuits a user could have meant when a dotted
 	 * path names no subcircuit: those at the deepest level the path
 	 * does reach, e.g. for "group1.HalfAdder3" (with group1 present)
@@ -3135,7 +3087,8 @@ public class JLSStart extends JFrame implements ChangeListener {
 	 * before HalfAdder10).
 	 *
 	 * @param top The circuit the path starts from.
-	 * @param path The dotted path that failed to resolve.
+	 * @param path The path, as split by parseName, that failed to
+	 *            resolve.
 	 *
 	 * @return e.g. "subcircuits in group1: HalfAdder1, HalfAdder2",
 	 *         "top-level subcircuits: alu", or
@@ -3143,28 +3096,19 @@ public class JLSStart extends JFrame implements ChangeListener {
 	 *
 	 * @jls.testedby jls.CliImageExportTest#circuitOptionNamingNoSubcircuitIsARuntimeError()
 	 */
-	static String subcircuitListing(Circuit top, String path) {
+	static String subcircuitListing(Circuit top, List<String> path) {
 
-		final Vector<String> names = parseName(path);
 		Circuit level = top;
 		String levelPath = "";
-		if (names != null) {
-			for (String step : names) {
-				final Circuit next = childSubcircuit(level, step);
-				if (next == null)
-					break;
-				level = next;
-				levelPath = levelPath.isEmpty() ? step
-						: levelPath + "." + step;
-			}
+		for (String step : path) {
+			final Circuit next = level.getSubCircuit(step);
+			if (next == null)
+				break;
+			level = next;
+			levelPath = levelPath.isEmpty() ? step : levelPath + "." + step;
 		}
-		final List<String> subs = new ArrayList<>();
-		for (Element el : level.getElementsInStableOrder()) {
-			if (el instanceof SubCircuit sub) {
-				subs.add(sub.getName());
-			}
-		}
-		subs.sort(JLSStart::naturalCompare);
+		final List<String> subs = new ArrayList<>(level.getSubCircuitNames());
+		subs.sort(Util::naturalCompare);
 		if (subs.isEmpty()) {
 			return levelPath.isEmpty() ? "the top level has no subcircuits"
 					: levelPath + " has no subcircuits";
@@ -3173,49 +3117,6 @@ public class JLSStart extends JFrame implements ChangeListener {
 				: "subcircuits in " + levelPath + ": ")
 				+ String.join(", ", subs);
 	} // end of subcircuitListing method
-
-	/**
-	 * Compare names case-insensitively, with runs of digits compared
-	 * by numeric value, so HalfAdder2 sorts before HalfAdder10.
-	 *
-	 * @param a The first name.
-	 * @param b The second name.
-	 *
-	 * @return negative, zero or positive as a sorts before, with or
-	 *         after b.
-	 *
-	 * @jls.testedby jls.CliImageExportTest#subcircuitListingSortsNumberedNamesNaturally()
-	 */
-	static int naturalCompare(String a, String b) {
-
-		int i = 0;
-		int j = 0;
-		while (i < a.length() && j < b.length()) {
-			final char ca = a.charAt(i);
-			final char cb = b.charAt(j);
-			if (Character.isDigit(ca) && Character.isDigit(cb)) {
-				final int startA = i;
-				final int startB = j;
-				while (i < a.length() && Character.isDigit(a.charAt(i)))
-					i += 1;
-				while (j < b.length() && Character.isDigit(b.charAt(j)))
-					j += 1;
-				final int c = new BigInteger(a.substring(startA, i))
-						.compareTo(new BigInteger(b.substring(startB, j)));
-				if (c != 0)
-					return c;
-			}
-			else {
-				final int c = Character.compare(Character.toLowerCase(ca),
-						Character.toLowerCase(cb));
-				if (c != 0)
-					return c;
-				i += 1;
-				j += 1;
-			}
-		}
-		return Integer.compare(a.length() - i, b.length() - j);
-	} // end of naturalCompare method
 
 	/**
 	 * Break compound name (a.b.c) into components.
