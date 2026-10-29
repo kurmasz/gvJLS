@@ -104,6 +104,8 @@ public class JLSStart extends JFrame implements ChangeListener {
 	private static @Nullable String startFile = null;
 	/** Image export output file name (-i flag operand), or null to derive it from the circuit name. */
 	private static @Nullable String imageFile = null;
+	/** Dotted subcircuit instance path to export instead of the top level (-circuit flag), or null for the top level. */
+	private static @Nullable String imageCircuit = null;
 	/** VCD waveform output file name (-vcd flag), or null if none given. */
 	private static @Nullable String vcdFile = null;
 	/** HDL export output file name (-export flag), or null if none given. */
@@ -347,12 +349,29 @@ public class JLSStart extends JFrame implements ChangeListener {
 						+ " is not a valid circuit file: " + JLSInfo.loadError);
 				System.exit(1);
 			}
+			// -circuit: draw the named subcircuit instead of the top level
+			Circuit drawn = circ;
+			final String path = imageCircuit;
+			if (path != null) {
+				final Circuit found = subcircuitAt(circ, path);
+				if (found == null) {
+					System.err.println("jls: error: " + startFile
+							+ " has no subcircuit " + path + "; "
+							+ subcircuitListing(circ, path));
+					System.exit(1);
+					return;
+				}
+				drawn = found;
+			}
+
 			// export to the caller-chosen path, or PNG named after the
-			// circuit by default; the format follows the file extension
-			// (issue #71)
-			String outFile = (imageFile != null) ? imageFile : name + ".png";
+			// circuit (and subcircuit) by default; the format follows the
+			// file extension (issue #71)
+			final String outFile = (imageFile != null) ? imageFile
+					: (path == null) ? name + ".png"
+					: name + "-" + path + ".png";
 			try {
-				CircuitRenderer.of(circ).exportImage(outFile);
+				CircuitRenderer.of(drawn).exportImage(outFile);
 			} catch (Exception e) {
 				System.err.println("jls: error: can't export image to "
 						+ outFile + ": " + e);
@@ -763,6 +782,8 @@ public class JLSStart extends JFrame implements ChangeListener {
 				"run in batch (headless) mode"),
 		new FlagSpec("i", Arity.OPTIONAL, "imagefile", "an image file",
 				"export an image of the circuit (default circuit_file.png; use .jpg/.jpeg for JPEG, .svg for SVG)"),
+		new FlagSpec("circuit", Arity.REQUIRED, "name", "a subcircuit name",
+				"with -i: export the named subcircuit instead of the top level; nested subcircuits are named by dotted path, e.g. alu.adder (default image circuit_file-name.png)"),
 		new FlagSpec("s", Arity.REQUIRED, "file", "a startup file",
 				"startup parameter file"),
 		new FlagSpec("t", Arity.REQUIRED, "file", "a test file",
@@ -915,6 +936,11 @@ public class JLSStart extends JFrame implements ChangeListener {
 		if ((boardName == null) != (pinsFile == null)) {
 			usageError("options -board and -pins must be used together");
 		}
+
+		// -circuit selects what -i draws and means nothing without it
+		if (imageCircuit != null && !JLSInfo.imgexport) {
+			usageError("option -circuit requires -i");
+		}
 	} // end of parseCommandLine method
 
 	/**
@@ -1040,6 +1066,18 @@ public class JLSStart extends JFrame implements ChangeListener {
 				}
 				imageFile = opnd;
 			}
+			break;
+		case "circuit":
+			// a dotted path of subcircuit names, the same form the
+			// startup file uses for elements inside subcircuits
+			// (-circuit is Arity.REQUIRED, so opnd cannot be null; the
+			// guard keeps that invariant locally checkable)
+			if (opnd == null || parseName(opnd) == null) {
+				usageError("option -circuit requires a subcircuit name or "
+						+ "dotted path of names (letters, digits and "
+						+ "underscores, starting with a letter): " + opnd);
+			}
+			imageCircuit = opnd;
 			break;
 		case "r":
 			printer = opnd;
@@ -3034,6 +3072,150 @@ public class JLSStart extends JFrame implements ChangeListener {
 		Circuit circ = ed.getCircuit();
 		CircuitRenderer.of(circ).exportImage(fileName);
 	} // end of exportImage method
+
+	/**
+	 * The subcircuit at a dotted path of subcircuit names below a
+	 * circuit, e.g. "alu.adder" is subcircuit adder inside subcircuit
+	 * alu. Names are those of the SubCircuit elements, which loading
+	 * sets to the nested circuits' names. The editor keeps them unique
+	 * within a circuit; a repeat in a hand-edited file resolves as
+	 * {@link #childSubcircuit} describes.
+	 *
+	 * @param top The circuit the path starts from.
+	 * @param path The dotted path of subcircuit names.
+	 *
+	 * @return the subcircuit, or null if the path is malformed or
+	 *         names no subcircuit.
+	 *
+	 * @jls.testedby jls.CliImageExportTest#circuitOptionDrawsOnlyTheNamedLevel()
+	 * @jls.testedby jls.CliImageExportTest#circuitOptionFollowsADottedPathIntoNestedSubcircuits()
+	 * @jls.testedby jls.CliImageExportTest#circuitOptionNamingNoSubcircuitIsARuntimeError()
+	 */
+	static @Nullable Circuit subcircuitAt(Circuit top, String path) {
+
+		final Vector<String> names = parseName(path);
+		if (names == null)
+			return null;
+		Circuit circ = top;
+		for (String step : names) {
+			final Circuit next = childSubcircuit(circ, step);
+			if (next == null)
+				return null;
+			circ = next;
+		}
+		return circ;
+	} // end of subcircuitAt method
+
+	/**
+	 * The subcircuit with a given name directly inside a circuit: the
+	 * first in stable element order, so a repeated name (possible only
+	 * in a hand-edited file) resolves deterministically.
+	 *
+	 * @param circ The circuit to look in.
+	 * @param name The subcircuit name.
+	 *
+	 * @return the subcircuit, or null if circ has none by that name.
+	 */
+	private static @Nullable Circuit childSubcircuit(Circuit circ,
+			String name) {
+
+		for (Element el : circ.getElementsInStableOrder()) {
+			if (el instanceof SubCircuit sub && name.equals(sub.getName())) {
+				return sub.getSubCircuit();
+			}
+		}
+		return null;
+	} // end of childSubcircuit method
+
+	/**
+	 * Describe the subcircuits a user could have meant when a dotted
+	 * path names no subcircuit: those at the deepest level the path
+	 * does reach, e.g. for "group1.HalfAdder3" (with group1 present)
+	 * the subcircuits inside group1, in natural order (HalfAdder2
+	 * before HalfAdder10).
+	 *
+	 * @param top The circuit the path starts from.
+	 * @param path The dotted path that failed to resolve.
+	 *
+	 * @return e.g. "subcircuits in group1: HalfAdder1, HalfAdder2",
+	 *         "top-level subcircuits: alu", or
+	 *         "group1 has no subcircuits".
+	 *
+	 * @jls.testedby jls.CliImageExportTest#circuitOptionNamingNoSubcircuitIsARuntimeError()
+	 */
+	static String subcircuitListing(Circuit top, String path) {
+
+		final Vector<String> names = parseName(path);
+		Circuit level = top;
+		String levelPath = "";
+		if (names != null) {
+			for (String step : names) {
+				final Circuit next = childSubcircuit(level, step);
+				if (next == null)
+					break;
+				level = next;
+				levelPath = levelPath.isEmpty() ? step
+						: levelPath + "." + step;
+			}
+		}
+		final List<String> subs = new ArrayList<>();
+		for (Element el : level.getElementsInStableOrder()) {
+			if (el instanceof SubCircuit sub) {
+				subs.add(sub.getName());
+			}
+		}
+		subs.sort(JLSStart::naturalCompare);
+		if (subs.isEmpty()) {
+			return levelPath.isEmpty() ? "the top level has no subcircuits"
+					: levelPath + " has no subcircuits";
+		}
+		return (levelPath.isEmpty() ? "top-level subcircuits: "
+				: "subcircuits in " + levelPath + ": ")
+				+ String.join(", ", subs);
+	} // end of subcircuitListing method
+
+	/**
+	 * Compare names case-insensitively, with runs of digits compared
+	 * by numeric value, so HalfAdder2 sorts before HalfAdder10.
+	 *
+	 * @param a The first name.
+	 * @param b The second name.
+	 *
+	 * @return negative, zero or positive as a sorts before, with or
+	 *         after b.
+	 *
+	 * @jls.testedby jls.CliImageExportTest#subcircuitListingSortsNumberedNamesNaturally()
+	 */
+	static int naturalCompare(String a, String b) {
+
+		int i = 0;
+		int j = 0;
+		while (i < a.length() && j < b.length()) {
+			final char ca = a.charAt(i);
+			final char cb = b.charAt(j);
+			if (Character.isDigit(ca) && Character.isDigit(cb)) {
+				final int startA = i;
+				final int startB = j;
+				while (i < a.length() && Character.isDigit(a.charAt(i)))
+					i += 1;
+				while (j < b.length() && Character.isDigit(b.charAt(j)))
+					j += 1;
+				final int c = new BigInteger(a.substring(startA, i))
+						.compareTo(new BigInteger(b.substring(startB, j)));
+				if (c != 0)
+					return c;
+			}
+			else {
+				final int c = Character.compare(Character.toLowerCase(ca),
+						Character.toLowerCase(cb));
+				if (c != 0)
+					return c;
+				i += 1;
+				j += 1;
+			}
+		}
+		return Integer.compare(a.length() - i, b.length() - j);
+	} // end of naturalCompare method
 
 	/**
 	 * Break compound name (a.b.c) into components.
