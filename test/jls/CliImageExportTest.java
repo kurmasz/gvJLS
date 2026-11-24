@@ -294,7 +294,6 @@ class CliImageExportTest {
 		// the top
 		final String[][] cases = {
 			{"nope", "top-level subcircuits: alu"},
-			{"inner", "top-level subcircuits: alu"},
 			{"alu.nope", "subcircuits in alu: inner"},
 			{"alu.nope.deeper", "subcircuits in alu: inner"},
 			{"alu.inner.nope", "alu.inner has no subcircuits"},
@@ -306,6 +305,141 @@ class CliImageExportTest {
 					+ "; " + c[1]), r.stderr);
 		}
 		assertFalse(new File(tmp.toFile(), "cpu-nope.png").exists());
+	}
+
+	@Test
+	void aPlainNameFindsTheSubcircuitAtAnyDepth() throws Exception {
+		// no dot: like -list-subcircuits, the name may sit at any depth
+		writeNestedCircuit("cpu.jls");
+		final Result r = run("-i", "-circuit", "inner", "cpu.jls");
+		assertEquals(0, r.exit, r.stderr);
+		assertDecodableImage("cpu-inner.png", 0x89, 'P', 'N', 'G');
+	}
+
+	@Test
+	void dotExportsTheTopLevelUnderTheDefaultName() throws Exception {
+		writeNestedCircuit("cpu.jls");
+		Result r = run("-i", "-circuit", ".", "cpu.jls");
+		assertEquals(0, r.exit, r.stderr);
+		assertDecodableImage("cpu.png", 0x89, 'P', 'N', 'G');
+		r = run("-i", "top.svg", "-circuit", ".", "cpu.jls");
+		assertEquals(0, r.exit, r.stderr);
+		final String svg = svgText("top.svg");
+		assertTrue(svg.contains(">out<"), "the top level is missing");
+		// the top level shows alu as a block (with its port r); only
+		// drawing the alu level itself would show its inner block
+		assertFalse(svg.contains(">inner<"), "the alu level was drawn");
+		assertFalse(svg.contains("(top level)"), "a lone circuit got a caption");
+	}
+
+	@Test
+	void doubleStarStacksEveryLevelUnderCaptionsInTreeOrder()
+			throws Exception {
+		writeNestedCircuit("cpu.jls");
+		final Result r = run("-i", "all.svg", "-circuit", "**", "cpu.jls");
+		assertEquals(0, r.exit, r.stderr);
+		final String svg = svgText("all.svg");
+		final int top = svg.indexOf(">cpu (top level)<");
+		final int alu = svg.indexOf(">alu<");
+		final int inner = svg.indexOf(">alu.inner<");
+		assertTrue(top >= 0 && alu > top && inner > alu,
+				"captions missing or out of order: " + top + " " + alu
+						+ " " + inner);
+		for (String pin : new String[] {">out<", ">r<", ">q<"}) {
+			assertTrue(svg.contains(pin), "a level is missing: " + pin);
+		}
+	}
+
+	/**
+	 * The attributes of the SVG text element with the given content,
+	 * minus its position, e.g. the font and colour of a pin label.
+	 */
+	private static String textStyle(String svg, String content) {
+		final int end = svg.indexOf(">" + content + "</text>");
+		assertTrue(end >= 0, "no text " + content);
+		final int start = svg.lastIndexOf("<text", end);
+		return svg.substring(start, end)
+				.replaceAll("\\s(x|y|transform)=(\"[^\"]*\"|'[^']*')", "");
+	}
+
+	@Test
+	void stackedCircuitsKeepTheFontOfASingleExport() throws Exception {
+		// regression: the caption font leaked into the circuits drawn
+		// below it, so their labels overflowed their shapes
+		writeNestedCircuit("cpu.jls");
+		Result r = run("-i", "alone.svg", "-circuit", "alu", "cpu.jls");
+		assertEquals(0, r.exit, r.stderr);
+		r = run("-i", "stack.svg", "-circuit", "alu", "-circuit", "alu.inner",
+				"cpu.jls");
+		assertEquals(0, r.exit, r.stderr);
+		assertEquals(textStyle(svgText("alone.svg"), "r"),
+				textStyle(svgText("stack.svg"), "r"));
+	}
+
+	@Test
+	void aGlobStacksItsMatchesUnderADefaultName() throws Exception {
+		writeNestedCircuit("cpu.jls");
+		final Result r = run("-i", "-circuit", "*", "cpu.jls");
+		assertEquals(0, r.exit, r.stderr);
+		assertDecodableImage("cpu-circuits.png", 0x89, 'P', 'N', 'G');
+		final Result j = run("-i", "subs.jpg", "-circuit", "*", "cpu.jls");
+		assertEquals(0, j.exit, j.stderr);
+		assertDecodableImage("subs.jpg", 0xFF, 0xD8);
+	}
+
+	@Test
+	void repeatedCircuitOptionsStackTheirUnion() throws Exception {
+		writeNestedCircuit("cpu.jls");
+		final Result r = run("-i", "two.svg", "-circuit", "alu.inner",
+				"-circuit", ".", "cpu.jls");
+		assertEquals(0, r.exit, r.stderr);
+		final String svg = svgText("two.svg");
+		assertTrue(svg.indexOf(">cpu (top level)<") >= 0
+				&& svg.indexOf(">alu.inner<") > svg.indexOf(">cpu (top level)<"),
+				"the top level should come first");
+		assertTrue(svg.contains(">q<"), "the inner level is missing");
+		assertFalse(svg.contains(">inner<"), "the alu level was drawn");
+	}
+
+	@Test
+	void circuitsIsASynonymForCircuit() throws Exception {
+		writeNestedCircuit("cpu.jls");
+		Result r = run("-i", "all.svg", "-circuits", "**", "cpu.jls");
+		assertEquals(0, r.exit, r.stderr);
+		final String svg = svgText("all.svg");
+		assertTrue(svg.contains(">cpu (top level)<") && svg.contains(">alu.inner<"),
+				"-circuits '**' did not stack every level");
+		// the two spellings mix, and -circuits is not -circuit + "s"
+		r = run("-i", "mix.svg", "-circuit", ".", "-circuits", "inner",
+				"cpu.jls");
+		assertEquals(0, r.exit, r.stderr);
+		assertTrue(svgText("mix.svg").contains(">alu.inner<"));
+		r = run("-b", "-circuits", "alu", "cpu.jls");
+		assertEquals(2, r.exit, r.stderr);
+		assertTrue(r.stderr.contains("requires -i"), r.stderr);
+		r = run("-i", "-circuits", "alu[", "cpu.jls");
+		assertEquals(2, r.exit, r.stderr);
+		assertTrue(r.stderr.contains("option -circuits requires"), r.stderr);
+	}
+
+	@Test
+	void aPatternThatMissesAlongsideOthersIsOnlyAWarning() throws Exception {
+		writeNestedCircuit("cpu.jls");
+		final Result r = run("-i", "-circuit", "alu", "-circuit", "nope",
+				"cpu.jls");
+		assertEquals(0, r.exit, r.stderr);
+		assertTrue(r.stderr.contains("jls: warning: cpu.jls has no subcircuit nope"),
+				r.stderr);
+		assertDecodableImage("cpu-circuits.png", 0x89, 'P', 'N', 'G');
+	}
+
+	@Test
+	void aGlobThatMatchesNothingIsARuntimeError() throws Exception {
+		writeNestedCircuit("cpu.jls");
+		final Result r = run("-i", "-circuit", "x*", "cpu.jls");
+		assertEquals(1, r.exit, r.stderr);
+		assertTrue(r.stderr.contains("jls: error: cpu.jls has no subcircuit "
+				+ "matching x*; top-level subcircuits: alu"), r.stderr);
 	}
 
 	@Test
@@ -329,7 +463,8 @@ class CliImageExportTest {
 	@Test
 	void malformedCircuitPathIsAUsageError() throws Exception {
 		writeNestedCircuit("cpu.jls");
-		for (String path : new String[] {"alu..inner", "alu.", "9alu"}) {
+		for (String path : new String[] {"alu..inner", "alu.", "9alu",
+				"alu["}) {
 			final Result r = run("-i", "-circuit", path, "cpu.jls");
 			assertEquals(2, r.exit, path + ": " + r.stderr);
 			assertTrue(r.stderr.contains(
@@ -342,7 +477,7 @@ class CliImageExportTest {
 		writeNestedCircuit("cpu.jls");
 		final Result r = run("-b", "-circuit", "alu", "cpu.jls");
 		assertEquals(2, r.exit, r.stderr);
-		assertTrue(r.stderr.contains("option -circuit requires -i"),
+		assertTrue(r.stderr.contains("option -circuit (or -circuits) requires -i"),
 				r.stderr);
 	}
 

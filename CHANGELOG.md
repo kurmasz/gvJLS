@@ -19,6 +19,33 @@ All notable changes to JLS are documented here. The format follows
   no subcircuit exits 1 (`jls: error: ... has no subcircuit ...`)
   and lists the subcircuits at the deepest level the path reached; a
   malformed path, or `-circuit` without `-i`, is a usage error (exit 2).
+- `-circuit` is repeatable and accepts `.` (the top-level circuit)
+  and the same glob patterns as `-list-subcircuits`; a bare `'**'`
+  selects the top level and every subcircuit, other globs subcircuits
+  only. When the patterns select more than one circuit, `-i` stacks
+  them top to bottom in one image, in tree order, each under a caption
+  with its dotted path (the default name is
+  `circuit_file-circuits.png`); a JPEG taller or wider than 65535
+  pixels is refused with a hint to use PNG or SVG. A plain name with
+  no dot now finds the subcircuit at any depth, as in
+  `-list-subcircuits`. A pattern that selects nothing is a warning
+  when others select something, and an error (exit 1) otherwise.
+  `-circuits` is a synonym for `-circuit` (`-circuits '**'`).
+- `-list-subcircuits [pattern] circuit.jls` prints the circuit's
+  subcircuits as a tree (the dotted paths `-circuit` accepts) and
+  exits. An optional glob pattern keeps only the matching subcircuits,
+  plus the subcircuits enclosing them. The glob matches whole dotted
+  paths: `*` and `?` stay within one name, `**` spans levels
+  (`**.carry`, `alu.**`), and `[a-z]`, `[!0-9]` and `{alu,regs}` work
+  as in shells. As in `.gitignore`, a pattern without a dot matches a
+  name at any depth (`'adder*'`), while one with a dot matches from the
+  top level (`'alu.*'`); quote patterns so the shell leaves them alone.
+  A separated operand is taken as the pattern unless it ends in
+  `.jls`/`.jls~`; a pattern starting with `-` must be attached
+  (`-list-subcircuits-x`). The tree's root line is `. (<circuit>)`,
+  since `.` names the top level. An invalid pattern, or combining it with
+  `-i`, `-b`, `-export`, `-savetext`, `-p` or `-v`, is a usage error
+  (exit 2).
 - The PIT mutation-testing gate is promoted from report-only to a
   blocking climb-ratchet (#159): the `pitest` profile now carries
   `mutationThreshold` 80 / `testStrengthThreshold` 82, floored 2+

@@ -104,8 +104,12 @@ public class JLSStart extends JFrame implements ChangeListener {
 	private static @Nullable String startFile = null;
 	/** Image export output file name (-i flag operand), or null to derive it from the circuit name. */
 	private static @Nullable String imageFile = null;
-	/** Dotted subcircuit instance path to export instead of the top level (-circuit flag), or null for the top level. */
-	private static @Nullable String imageCircuit = null;
+	/** The -circuit patterns (dotted paths, globs or "." for the top level), in the order given; empty to export the top level. */
+	private static final List<String> imageCircuits = new ArrayList<>();
+	/** True if -list-subcircuits asked for the subcircuit tree to be printed. */
+	private static boolean listSubcircuits = false;
+	/** The -list-subcircuits pattern (see SubcircuitSelector), or null to list all. */
+	private static @Nullable String listGlob = null;
 	/** VCD waveform output file name (-vcd flag), or null if none given. */
 	private static @Nullable String vcdFile = null;
 	/** HDL export output file name (-export flag), or null if none given. */
@@ -157,6 +161,28 @@ public class JLSStart extends JFrame implements ChangeListener {
 
 		// save exception handler reference
 		exHandler = exh;
+
+		// -list-subcircuits: print the subcircuit tree and stop
+		if (listSubcircuits) {
+			System.setProperty("java.awt.headless", "true");
+			if (startFile == null) {
+				System.err.println("jls: error: -list-subcircuits requires a circuit file");
+				System.exit(1);
+				return;
+			}
+			final Circuit circ = loadCircuitHeadless(startFile);
+			final String glob = listGlob;
+			final SubcircuitSelector selector = glob == null ? null
+					: SubcircuitSelector.of(List.of(glob));
+			for (String line : subcircuitTree(circ, selector)) {
+				System.out.println(line);
+			}
+			if (selector != null && !selector.unmatched(circ).isEmpty()) {
+				System.err.println("jls: warning: no subcircuit matches "
+						+ glob);
+			}
+			return;
+		}
 
 		// if print of circuit wanted, and there is a circuit specified, then print it
 		if (printCircuit && startFile != null) {
@@ -349,35 +375,49 @@ public class JLSStart extends JFrame implements ChangeListener {
 						+ " is not a valid circuit file: " + JLSInfo.loadError);
 				System.exit(1);
 			}
-			// -circuit: draw the named subcircuit instead of the top level
-			Circuit drawn = circ;
-			final String path = imageCircuit;
-			if (path != null) {
-				final List<String> names = parseName(path);
-				if (names == null) {
-					// unreachable: apply() rejected a malformed path
-					throw new IllegalStateException(
-							"unvalidated -circuit path " + path);
+			// -circuit: draw the selected levels instead of the top level;
+			// one selected level is drawn alone, several are stacked
+			// under captions in tree order
+			List<SubcircuitSelector.Selected> drawn =
+					List.of(new SubcircuitSelector.Selected("", circ));
+			if (!imageCircuits.isEmpty()) {
+				final SubcircuitSelector selector =
+						SubcircuitSelector.of(imageCircuits);
+				drawn = selector.select(circ);
+				final List<String> missed = selector.unmatched(circ);
+				final String level = drawn.isEmpty() ? "error" : "warning";
+				for (String pattern : missed) {
+					System.err.println("jls: " + level + ": "
+							+ noMatchMessage(startFile, circ, pattern));
 				}
-				final Circuit found = circ.getSubCircuit(names);
-				if (found == null) {
-					System.err.println("jls: error: " + startFile
-							+ " has no subcircuit " + path + "; "
-							+ subcircuitListing(circ, names));
+				if (drawn.isEmpty()) {
 					System.exit(1);
 					return;
 				}
-				drawn = found;
 			}
 
 			// export to the caller-chosen path, or PNG named after the
-			// circuit (and subcircuit) by default; the format follows the
-			// file extension (issue #71)
+			// circuit (and the subcircuit, for one plain path) by
+			// default; the format follows the file extension (issue #71)
 			final String outFile = (imageFile != null) ? imageFile
-					: (path == null) ? name + ".png"
-					: name + "-" + path + ".png";
+					: name + defaultImageSuffix(imageCircuits) + ".png";
 			try {
-				CircuitRenderer.of(drawn).exportImage(outFile);
+				if (drawn.size() == 1) {
+					CircuitRenderer.of(drawn.get(0).circuit())
+							.exportImage(outFile);
+				}
+				else {
+					final List<CircuitRenderer.Captioned> items =
+							new ArrayList<>();
+					for (SubcircuitSelector.Selected s : drawn) {
+						items.add(new CircuitRenderer.Captioned(
+								s.path().isEmpty()
+										? circ.getName() + " (top level)"
+										: s.path(),
+								s.circuit()));
+					}
+					CircuitRenderer.exportStack(items, outFile);
+				}
 			} catch (Exception e) {
 				System.err.println("jls: error: can't export image to "
 						+ outFile + ": " + e);
@@ -789,7 +829,11 @@ public class JLSStart extends JFrame implements ChangeListener {
 		new FlagSpec("i", Arity.OPTIONAL, "imagefile", "an image file",
 				"export an image of the circuit (default circuit_file.png; use .jpg/.jpeg for JPEG, .svg for SVG)"),
 		new FlagSpec("circuit", Arity.REQUIRED, "name", "a subcircuit name",
-				"with -i: export the named subcircuit instead of the top level; nested subcircuits are named by dotted path, e.g. alu.adder (default image circuit_file-name.png)"),
+				"with -i: export the named subcircuit instead of the top level; nested subcircuits are named by dotted path, e.g. alu.adder (default image circuit_file-name.png). Repeatable, and may be '.' (the top level) or a quoted glob as for -list-subcircuits ('**' is the top level and every subcircuit); several matches are stacked in one image under captions (default circuit_file-circuits.png)"),
+		new FlagSpec("circuits", Arity.REQUIRED, "pattern", "a subcircuit name or pattern",
+				"same as -circuit, e.g. -circuits '**'"),
+		new FlagSpec("list-subcircuits", Arity.OPTIONAL, "pattern", "a glob pattern",
+				"print the circuit's subcircuits as a tree (the dotted paths -circuit accepts) and exit; with a quoted glob pattern, only the matching subcircuits and those enclosing them: * and ? stay within one name, ** spans levels, [a-z] and {a,b} as in shells; a pattern without a dot matches a name at any depth ('adder*'), one with a dot matches from the top ('alu.*'); '.' is the top level"),
 		new FlagSpec("s", Arity.REQUIRED, "file", "a startup file",
 				"startup parameter file"),
 		new FlagSpec("t", Arity.REQUIRED, "file", "a test file",
@@ -906,14 +950,16 @@ public class JLSStart extends JFrame implements ChangeListener {
 					}
 					break;
 				case OPTIONAL:
-					// only -i is OPTIONAL; a separated operand is only
-					// consumed when it names an image file, so that
-					// "jls -i circuit.jls" still exports to the default
+					// a separated operand is only consumed when it
+					// cannot be the circuit file (optionalOperandFollows),
+					// so that "jls -i circuit.jls" still exports to the
+					// default
 					if (!attached.isEmpty()) {
 						opnd = attached;
 					}
 					else if (pos + 1 < args.length
-							&& isImageFileName(args[pos + 1])) {
+							&& optionalOperandFollows(spec.flag,
+									args[pos + 1])) {
 						opnd = args[pos + 1];
 						pos += 1;
 					}
@@ -944,10 +990,48 @@ public class JLSStart extends JFrame implements ChangeListener {
 		}
 
 		// -circuit selects what -i draws and means nothing without it
-		if (imageCircuit != null && !JLSInfo.imgexport) {
-			usageError("option -circuit requires -i");
+		if (!imageCircuits.isEmpty() && !JLSInfo.imgexport) {
+			usageError("option -circuit (or -circuits) requires -i");
+		}
+
+		// -list-subcircuits is a one-shot query of its own; combining
+		// it with another mode would leave the order and the meaning
+		// of the output unclear
+		if (listSubcircuits) {
+			final List<String> others = new ArrayList<>();
+			if (JLSInfo.batch) others.add("-b");
+			if (JLSInfo.imgexport) others.add("-i");
+			if (JLSInfo.hdlexport) others.add("-export");
+			if (JLSInfo.textsave) others.add("-savetext");
+			if (printCircuit) others.add(printCircuitTop ? "-v" : "-p");
+			if (!others.isEmpty()) {
+				usageError("option -list-subcircuits cannot be combined with "
+						+ String.join(", ", others));
+			}
 		}
 	} // end of parseCommandLine method
+
+	/**
+	 * Whether the argument after a flag with an optional operand is that
+	 * operand rather than the circuit file (or another flag). -i takes it
+	 * only when it names an image file; -list-subcircuits takes it unless
+	 * it starts with '-' or names a circuit file (ends in .jls or .jls~),
+	 * so "jls -list-subcircuits cpu.jls" lists everything. A pattern
+	 * that starts with '-' must be attached: -list-subcircuits-x.
+	 *
+	 * @param flag The flag name (an OPTIONAL row of the flag table).
+	 * @param next The argument following the flag.
+	 *
+	 * @return true if next is the flag's operand.
+	 */
+	private static boolean optionalOperandFollows(String flag, String next) {
+
+		if (flag.equals("i")) {
+			return isImageFileName(next);
+		}
+		return !next.isEmpty() && next.charAt(0) != '-'
+				&& !next.endsWith(".jls") && !next.endsWith(".jls~");
+	} // end of optionalOperandFollows method
 
 	/**
 	 * Whether this invocation, as parsed, will start the interactive GUI
@@ -961,7 +1045,8 @@ public class JLSStart extends JFrame implements ChangeListener {
 	 */
 	static boolean guiSessionRequested() {
 
-		return !(printCircuit && startFile != null)
+		return !listSubcircuits
+				&& !(printCircuit && startFile != null)
 				&& !JLSInfo.batch && !JLSInfo.imgexport
 				&& !JLSInfo.hdlexport && !JLSInfo.textsave;
 	} // end of guiSessionRequested method
@@ -1073,18 +1158,40 @@ public class JLSStart extends JFrame implements ChangeListener {
 				imageFile = opnd;
 			}
 			break;
-		case "circuit":
-			// a dotted path of subcircuit names, the same form the
-			// startup file uses for elements inside subcircuits
-			// (-circuit is Arity.REQUIRED, so opnd cannot be null; the
-			// guard keeps that invariant locally checkable)
-			if (opnd == null || parseName(opnd) == null) {
-				usageError("option -circuit requires a subcircuit name or "
-						+ "dotted path of names (letters, digits and "
-						+ "underscores, starting with a letter): " + opnd);
+		case "list-subcircuits":
+			listSubcircuits = true;
+			if (opnd != null) {
+				final String problem = SubcircuitSelector.problem(opnd);
+				if (problem != null) {
+					usageError("option -list-subcircuits pattern is not a "
+							+ "valid glob: " + opnd + " (" + problem + ")");
+				}
+				listGlob = opnd;
 			}
-			imageCircuit = opnd;
 			break;
+		case "circuit":
+		case "circuits": {
+			// a dotted path of subcircuit names (the same form the
+			// startup file uses for elements inside subcircuits), a
+			// glob over such paths, or "." for the top level; repeatable,
+			// and -circuits is a synonym that reads better with globs
+			// (both are Arity.REQUIRED, so opnd cannot be null; the
+			// guard keeps that invariant locally checkable)
+			if (opnd == null) {
+				usageError("option -" + flag + " requires a subcircuit name");
+				return;
+			}
+			final String problem = SubcircuitSelector.problem(opnd);
+			if (problem != null) {
+				usageError("option -" + flag + " requires a subcircuit name, "
+						+ "dotted path of names (letters, digits and "
+						+ "underscores, starting with a letter), glob "
+						+ "pattern, or '.' for the top level: " + opnd
+						+ " (" + problem + ")");
+			}
+			imageCircuits.add(opnd);
+			break;
+		}
 		case "r":
 			printer = opnd;
 			JLSInfo.printTrace = true;
@@ -3117,6 +3224,149 @@ public class JLSStart extends JFrame implements ChangeListener {
 				: "subcircuits in " + levelPath + ": ")
 				+ String.join(", ", subs);
 	} // end of subcircuitListing method
+
+	/**
+	 * The message for a -circuit pattern that selects nothing: for a
+	 * plain path, the subcircuits at the deepest level it reached (see
+	 * subcircuitListing); for a glob, the top-level subcircuits and a
+	 * pointer to -list-subcircuits.
+	 *
+	 * @param file The circuit file, for the message.
+	 * @param top The top-level circuit.
+	 * @param pattern The pattern that selected nothing.
+	 *
+	 * @return the message, without the "jls: error: " prefix.
+	 */
+	static String noMatchMessage(String file, Circuit top, String pattern) {
+
+		if (SubcircuitGlob.isLiteral(pattern)) {
+			final List<String> names = parseName(pattern);
+			return file + " has no subcircuit " + pattern + "; "
+					+ subcircuitListing(top,
+							names == null ? List.of() : names);
+		}
+		return file + " has no subcircuit matching " + pattern + "; "
+				+ subcircuitListing(top, List.of())
+				+ " (run jls -list-subcircuits " + file + " to see them all)";
+	} // end of noMatchMessage method
+
+	/**
+	 * The suffix of the default image name for some -circuit patterns:
+	 * none for the top level, "-alu.adder" for one plain path, and
+	 * "-circuits" for globs or several patterns.
+	 *
+	 * @param patterns The -circuit patterns, possibly none.
+	 *
+	 * @return the suffix to put between the circuit name and ".png".
+	 */
+	static String defaultImageSuffix(List<String> patterns) {
+
+		if (patterns.isEmpty()) {
+			return "";
+		}
+		if (patterns.size() == 1) {
+			final String only = patterns.get(0);
+			if (only.equals(SubcircuitSelector.TOP)) {
+				return "";
+			}
+			if (SubcircuitGlob.isLiteral(only)) {
+				return "-" + only;
+			}
+		}
+		return "-circuits";
+	} // end of defaultImageSuffix method
+
+	/**
+	 * Render a circuit's subcircuits as a tree, one line per subcircuit,
+	 * with the circuit itself as the root, shown as "." (how -circuit
+	 * names it), e.g.
+	 * <pre>
+	 * . (cpu)
+	 * |-- alu
+	 * |   `-- adder
+	 * `-- regs
+	 * </pre>
+	 * Siblings are in natural order (HalfAdder2 before HalfAdder10),
+	 * and a name repeated at one level is listed once, since a dotted
+	 * path can only reach the first. With a selector, a subcircuit is
+	 * listed if the selector selects it, or if it encloses one that is;
+	 * the root is always listed.
+	 *
+	 * @param top The circuit whose subcircuits to list.
+	 * @param selector The filter, or null to list every subcircuit.
+	 *
+	 * @return the lines of the tree, root first, without line ends.
+	 *
+	 * @jls.testedby jls.CliListSubcircuitsTest
+	 */
+	static List<String> subcircuitTree(Circuit top,
+			@Nullable SubcircuitSelector selector) {
+
+		final List<String> lines = new ArrayList<>();
+		lines.add(SubcircuitSelector.TOP + " (" + top.getName() + ")");
+		renderSubcircuitNodes(subcircuitNodes(top, "", selector), "", lines);
+		return lines;
+	} // end of subcircuitTree method
+
+	/**
+	 * One subcircuit in the -list-subcircuits tree, with the descendants
+	 * that survived the filter.
+	 *
+	 * @param name The subcircuit's name at its level.
+	 * @param children Its kept subcircuits, in display order.
+	 */
+	private record SubcircuitNode(String name, List<SubcircuitNode> children) {
+	}
+
+	/**
+	 * The kept subcircuits directly inside a circuit (see subcircuitTree).
+	 *
+	 * @param circ The circuit whose subcircuits to collect.
+	 * @param path The dotted path of circ, or "" for the top level.
+	 * @param selector The filter, or null to keep every subcircuit.
+	 *
+	 * @return the kept subcircuits, in natural order, each with its kept
+	 *         descendants.
+	 */
+	private static List<SubcircuitNode> subcircuitNodes(Circuit circ,
+			String path, @Nullable SubcircuitSelector selector) {
+
+		final List<String> names = SubcircuitSelector.childNames(circ);
+		final List<SubcircuitNode> nodes = new ArrayList<>();
+		for (String name : names) {
+			final Circuit sub = circ.getSubCircuit(name);
+			if (sub == null)
+				continue;
+			final String subPath = path.isEmpty() ? name : path + "." + name;
+			final List<SubcircuitNode> children =
+					subcircuitNodes(sub, subPath, selector);
+			if (selector == null || selector.selects(subPath)
+					|| !children.isEmpty()) {
+				nodes.add(new SubcircuitNode(name, children));
+			}
+		}
+		return nodes;
+	} // end of subcircuitNodes method
+
+	/**
+	 * Append the tree lines for some sibling subcircuits and their
+	 * descendants.
+	 *
+	 * @param nodes The siblings, in display order.
+	 * @param indent The prefix drawn in front of each sibling's line.
+	 * @param lines Where to append the lines.
+	 */
+	private static void renderSubcircuitNodes(List<SubcircuitNode> nodes,
+			String indent, List<String> lines) {
+
+		for (int k = 0; k < nodes.size(); k += 1) {
+			final boolean last = k == nodes.size() - 1;
+			final SubcircuitNode node = nodes.get(k);
+			lines.add(indent + (last ? "`-- " : "|-- ") + node.name());
+			renderSubcircuitNodes(node.children(),
+					indent + (last ? "    " : "|   "), lines);
+		}
+	} // end of renderSubcircuitNodes method
 
 	/**
 	 * Break compound name (a.b.c) into components.

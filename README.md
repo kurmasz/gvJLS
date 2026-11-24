@@ -133,7 +133,15 @@ install onto, or if you already have a Java runtime (JDK/JRE 25 or newer):
   `-i out.svg` for resolution-independent SVG — the right format for
   slides, lab reports and hosted docs; add `-circuit alu` to export
   subcircuit `alu` instead of the top level, or a dotted path such as
-  `-circuit alu.adder` for a subcircuit nested inside another),
+  `-circuit alu.adder` for a subcircuit nested inside another;
+  `-circuit` (or its synonym `-circuits`) is repeatable and takes `.`
+  for the top level or a quoted
+  glob such as `'b*'` or `'**'` (top level and every subcircuit), and
+  several matches are stacked into one captioned image;
+  `-list-subcircuits circuit.jls` prints the subcircuit tree, and
+  `-list-subcircuits 'adder*' circuit.jls` only the subcircuits
+  matching a glob: `*` within a name, `**` across levels, and a
+  pattern with a dot such as `'alu.*'` matched from the top),
   Verilog export (`-export out.v circuit.jls` writes the drawn circuit
   as a structural Verilog-2005 module — a deployment bridge, not an HDL
   tutorial; note JLS's two-state-plus-HiZ semantics),

@@ -322,34 +322,7 @@ public final class CircuitRenderer implements Printable {
 			svg.setTransform(svgTranslate);
 			svg.setColor(Color.white);
 			svg.fill(rect);
-			// draw in a deterministic order: elements live in a
-			// HashSet, and while raster export doesn't care (same
-			// pixels either way, overlaps aside), SVG serializes the
-			// draw order into the file - an unstable order would break
-			// byte-identical goldens across load instances. Wires
-			// under non-wires, like the interactive draw path.
-			List<Element> wireLayer = new ArrayList<Element>();
-			List<Element> partLayer = new ArrayList<Element>();
-			for (Element el : circuit.getElements()) {
-				(el instanceof Wire ? wireLayer : partLayer).add(el);
-			}
-			// order on index bounds, not x/y: wires keep x/y at their
-			// defaults, but their bounds are derived from their ends
-			java.util.Comparator<Element> drawOrder = java.util.Comparator
-					.comparingInt((Element el) -> el.getIndexBounds().x())
-					.thenComparingInt(el -> el.getIndexBounds().y())
-					.thenComparingInt(el -> el.getIndexBounds().width())
-					.thenComparingInt(el -> el.getIndexBounds().height())
-					.thenComparing(el -> el.getClass().getName())
-					.thenComparingInt(Element::getID);
-			wireLayer.sort(drawOrder);
-			partLayer.sort(drawOrder);
-			for (Element el : wireLayer) {
-				ElementRenderers.draw(svg, el);
-			}
-			for (Element el : partLayer) {
-				ElementRenderers.draw(svg, el);
-			}
+			drawInStableOrder(svg);
 			try {
 				java.nio.file.Files.writeString(java.nio.file.Path.of(file),
 						svg.getSVGDocument(),
@@ -388,5 +361,174 @@ public final class CircuitRenderer implements Printable {
 		}
 
 	} // end of exportImage method
+
+	/**
+	 * Draw every element in a deterministic order: elements live in a
+	 * HashSet, and while raster export doesn't care (same pixels either
+	 * way, overlaps aside), SVG serializes the draw order into the
+	 * file - an unstable order would break byte-identical goldens
+	 * across load instances. Wires under non-wires, like the
+	 * interactive draw path.
+	 *
+	 * @param g The graphics to draw with.
+	 */
+	private void drawInStableOrder(Graphics2D g) {
+
+		List<Element> wireLayer = new ArrayList<Element>();
+		List<Element> partLayer = new ArrayList<Element>();
+		for (Element el : circuit.getElements()) {
+			(el instanceof Wire ? wireLayer : partLayer).add(el);
+		}
+		// order on index bounds, not x/y: wires keep x/y at their
+		// defaults, but their bounds are derived from their ends
+		java.util.Comparator<Element> drawOrder = java.util.Comparator
+				.comparingInt((Element el) -> el.getIndexBounds().x())
+				.thenComparingInt(el -> el.getIndexBounds().y())
+				.thenComparingInt(el -> el.getIndexBounds().width())
+				.thenComparingInt(el -> el.getIndexBounds().height())
+				.thenComparing(el -> el.getClass().getName())
+				.thenComparingInt(Element::getID);
+		wireLayer.sort(drawOrder);
+		partLayer.sort(drawOrder);
+		for (Element el : wireLayer) {
+			ElementRenderers.draw(g, el);
+		}
+		for (Element el : partLayer) {
+			ElementRenderers.draw(g, el);
+		}
+	} // end of drawInStableOrder method
+
+	/**
+	 * One circuit in a stacked export, with the caption drawn above it.
+	 *
+	 * @param caption The caption, e.g. a dotted subcircuit path.
+	 * @param circuit The circuit to draw.
+	 */
+	public record Captioned(String caption, Circuit circuit) {
+	}
+
+	/** Border around each circuit in an export, in pixels. */
+	private static final int BORDER = 10;
+	/** Height of the caption band above each circuit in a stack. */
+	private static final int CAPTION_HEIGHT = 28;
+	/** Vertical space between circuits in a stack (holds a rule). */
+	private static final int STACK_GAP = 24;
+	/** Largest side JPEG can encode. */
+	private static final int JPEG_MAX_SIDE = 65535;
+
+	/**
+	 * Export several circuits into one image, stacked top to bottom,
+	 * each under its caption and separated by a thin rule. The format
+	 * follows the file extension as in {@link #exportImage(String)}.
+	 *
+	 * @param items The circuits, in the order to stack them.
+	 * @param file The name of the file to write to.
+	 * @throws IOException if the image is too large for its format or
+	 *             cannot be written.
+	 * @throws Exception if drawing fails.
+	 *
+	 * @jls.testedby jls.CliImageExportTest
+	 */
+	public static void exportStack(List<Captioned> items, String file)
+			throws Exception {
+
+		// each circuit's area: its bounds plus the border
+		final List<Rectangle> areas = new ArrayList<>();
+		long width = 0;
+		long height = 0;
+		for (Captioned item : items) {
+			Rectangle r = AwtGeom.awt(item.circuit().getBounds());
+			r = new Rectangle(r.x - BORDER, r.y - BORDER,
+					r.width + 2 * BORDER, r.height + 2 * BORDER);
+			areas.add(r);
+			width = Math.max(width, r.width);
+			height += CAPTION_HEIGHT + r.height;
+		}
+		height += (long) STACK_GAP * Math.max(0, items.size() - 1);
+		final String lower = file.toLowerCase(java.util.Locale.ROOT);
+		final boolean svgOut = lower.endsWith(".svg");
+		final boolean jpegOut = !svgOut && !lower.endsWith(".png");
+		if (jpegOut && (width > JPEG_MAX_SIDE || height > JPEG_MAX_SIDE)) {
+			throw new IOException("the stacked image is " + width + "x"
+					+ height + " pixels, but JPEG allows at most "
+					+ JPEG_MAX_SIDE + " per side; use .png or .svg");
+		}
+		if (!svgOut && width * height > Integer.MAX_VALUE) {
+			throw new IOException("the stacked image is " + width + "x"
+					+ height + " pixels, too large for a bitmap; use .svg");
+		}
+		final int w = (int) width;
+		final int h = (int) height;
+
+		final org.jfree.svg.SVGGraphics2D svg = svgOut
+				? new org.jfree.svg.SVGGraphics2D(w, h) : null;
+		final BufferedImage image = svgOut ? null
+				: new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+		final Graphics2D g = svg != null ? svg
+				: java.util.Objects.requireNonNull(image).createGraphics();
+		try {
+			if (svg != null) {
+				svg.setDefsKeyPrefix("jls");
+			}
+			g.setColor(Color.white);
+			g.fillRect(0, 0, w, h);
+			// element drawing inherits the context's font, so each
+			// circuit must be drawn with the font a single export has,
+			// not the caption's (else labels overflow their shapes)
+			final java.awt.Font circuitFont = g.getFont();
+			final java.awt.Font captionFont =
+					new java.awt.Font(java.awt.Font.SANS_SERIF,
+							java.awt.Font.BOLD, 16);
+			int y = 0;
+			for (int k = 0; k < items.size(); k += 1) {
+				final Rectangle area = areas.get(k);
+				if (k > 0) {
+					g.setTransform(new AffineTransform());
+					g.setColor(Color.lightGray);
+					g.drawLine(BORDER, y + STACK_GAP / 2, w - BORDER,
+							y + STACK_GAP / 2);
+					y += STACK_GAP;
+				}
+				g.setTransform(new AffineTransform());
+				g.setColor(Color.black);
+				g.setFont(captionFont);
+				g.drawString(items.get(k).caption(), BORDER,
+						y + CAPTION_HEIGHT - 8);
+				y += CAPTION_HEIGHT;
+				final AffineTransform place = new AffineTransform();
+				place.translate(-area.x, y - area.y);
+				g.setTransform(place);
+				g.setFont(circuitFont);
+				g.setColor(Color.white);
+				final CircuitRenderer renderer = of(items.get(k).circuit());
+				if (svg != null) {
+					renderer.drawInStableOrder(g);
+				}
+				else {
+					renderer.draw(g, new HashSet<Element>(), null);
+				}
+				y += area.height;
+			}
+
+			if (svg != null) {
+				java.nio.file.Files.writeString(java.nio.file.Path.of(file),
+						svg.getSVGDocument(),
+						java.nio.charset.StandardCharsets.UTF_8);
+			}
+			else {
+				final String format = jpegOut ? "jpg" : "png";
+				if (!ImageIO.write(java.util.Objects.requireNonNull(image),
+						format, new File(file))) {
+					throw new IOException("no " + format
+							+ " image writer available");
+				}
+			}
+		} finally {
+			g.dispose();
+			if (image != null) {
+				image.flush();
+			}
+		}
+	} // end of exportStack method
 
 } // end of CircuitRenderer class
