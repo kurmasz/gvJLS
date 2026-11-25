@@ -24,9 +24,11 @@ All notable changes to JLS are documented here. The format follows
   selects the top level and every subcircuit, other globs subcircuits
   only. When the patterns select more than one circuit, `-i` stacks
   them top to bottom in one image, in tree order, each under a caption
-  with its dotted path (the default name is
-  `circuit_file-circuits.png`); a JPEG taller or wider than 65535
-  pixels is refused with a hint to use PNG or SVG. A plain name with
+  with its dotted path. The default image name follows what is drawn:
+  `circuit_file-circuits.png` for a stack, and
+  `circuit_file-<subcircuit name>.png` for a single subcircuit, even
+  one a glob selected. A JPEG taller or wider than 65535 pixels is
+  refused with a hint to use PNG or SVG. A plain name with
   no dot now finds the subcircuit at any depth, as in
   `-list-subcircuits`. A pattern that selects nothing is a warning
   when others select something, and an error (exit 1) otherwise.

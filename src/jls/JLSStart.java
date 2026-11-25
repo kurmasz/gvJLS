@@ -397,10 +397,10 @@ public class JLSStart extends JFrame implements ChangeListener {
 			}
 
 			// export to the caller-chosen path, or PNG named after the
-			// circuit (and the subcircuit, for one plain path) by
+			// circuit (and the subcircuit, when just one is drawn) by
 			// default; the format follows the file extension (issue #71)
 			final String outFile = (imageFile != null) ? imageFile
-					: name + defaultImageSuffix(imageCircuits) + ".png";
+					: name + defaultImageSuffix(drawn) + ".png";
 			try {
 				if (drawn.size() == 1) {
 					CircuitRenderer.of(drawn.get(0).circuit())
@@ -827,13 +827,13 @@ public class JLSStart extends JFrame implements ChangeListener {
 		new FlagSpec("b", Arity.NONE, null, null,
 				"run in batch (headless) mode"),
 		new FlagSpec("i", Arity.OPTIONAL, "imagefile", "an image file",
-				"export an image of the circuit (default circuit_file.png; use .jpg/.jpeg for JPEG, .svg for SVG)"),
-		new FlagSpec("circuit", Arity.REQUIRED, "name", "a subcircuit name",
-				"with -i: export the named subcircuit instead of the top level; nested subcircuits are named by dotted path, e.g. alu.adder (default image circuit_file-name.png). Repeatable, and may be '.' (the top level) or a quoted glob as for -list-subcircuits ('**' is the top level and every subcircuit); several matches are stacked in one image under captions (default circuit_file-circuits.png)"),
+				"export an image of the top-level circuit and exit (Default name: <circuit>.png. Supported formats: .png, .jpg/.jpeg, and .svg.)"),
+		new FlagSpec("circuit", Arity.REQUIRED, "pattern", "a subcircuit name",
+				"draw the subcircuits matching pattern; repeatable; requires -i"),
 		new FlagSpec("circuits", Arity.REQUIRED, "pattern", "a subcircuit name or pattern",
-				"same as -circuit, e.g. -circuits '**'"),
+				"same as -circuit"),
 		new FlagSpec("list-subcircuits", Arity.OPTIONAL, "pattern", "a glob pattern",
-				"print the circuit's subcircuits as a tree (the dotted paths -circuit accepts) and exit; with a quoted glob pattern, only the matching subcircuits and those enclosing them: * and ? stay within one name, ** spans levels, [a-z] and {a,b} as in shells; a pattern without a dot matches a name at any depth ('adder*'), one with a dot matches from the top ('alu.*'); '.' is the top level"),
+				"print the subcircuits matching pattern as a tree and exit; default: print the entire tree"),
 		new FlagSpec("s", Arity.REQUIRED, "file", "a startup file",
 				"startup parameter file"),
 		new FlagSpec("t", Arity.REQUIRED, "file", "a test file",
@@ -849,7 +849,7 @@ public class JLSStart extends JFrame implements ChangeListener {
 		new FlagSpec("vcd", Arity.REQUIRED, "file", "a VCD output file",
 				"write watched-signal waveforms to the named VCD file (batch mode)"),
 		new FlagSpec("export", Arity.REQUIRED, "file", "an output file",
-				"export the circuit as Verilog-2005 (.v) or VHDL (.vhd/.vhdl), chosen by the file extension"),
+				"export the circuit as Verilog-2005 (.v) or VHDL (.vhd/.vhdl) (chosen by the file extension)"),
 		new FlagSpec("board", Arity.REQUIRED, "name", "a board name",
 				"with -export and -pins: also write a pin-constraint file (.pcf) for the named FPGA board (supported: "
 						+ Boards.names() + ")"),
@@ -1352,12 +1352,26 @@ public class JLSStart extends JFrame implements ChangeListener {
 			}
 			text.append(" : ").append(spec.description).append('\n');
 		}
+		text.append("\n");
+		text.append("subcircuit patterns (-circuit, -list-subcircuits):\n");
+		text.append("    adder        a subcircuit named adder, at any depth\n");
+		text.append("    alu.adder    a dotted path, starting from the top level\n");
+		text.append("    .            the top-level circuit itself\n");
+		text.append("    *  ?         any characters / one character within a name\n");
+		text.append("    **           any number of levels; '**' alone is the top level and every subcircuit\n");
+		text.append("    [a-z] {a,b}  a character from a set / any one of the alternatives\n");
+		text.append("    Note: Quote patterns to avoid conflicts with shell globbing.\n");
+		text.append("image names (when -i is not given a file name):\n");
+		text.append("    the top level only:         <circuit>.png\n");
+		text.append("    one subcircuit drawn:       <circuit>-<subcircuit>.png, e.g. counter-adder.png for alu.adder\n");
+		text.append("    several circuits stacked:   <circuit>-circuits.png\n");
 		text.append("operands may also be attached to the flag: -tfile, -d10000\n");
 		text.append("'--' ends flag processing so operands may begin with '-'\n");
 		text.append("JVM property -Djls.toolkit=default|wayland overrides Wayland toolkit auto-selection\n");
 		text.append("JVM property -Djls.laf=metal|system|<class> selects the Swing look-and-feel (default FlatLaf light)\n");
 		text.append("exit status: 0 success, 1 runtime failure, 2 usage error\n");
 		text.append("example: jls -b -sstartup -d10000 counter.jls\n");
+		text.append("example: jls -i -circuits '**' counter.jls\n");
 		return text.toString();
 	} // end of usageText method
 
@@ -3251,29 +3265,25 @@ public class JLSStart extends JFrame implements ChangeListener {
 	} // end of noMatchMessage method
 
 	/**
-	 * The suffix of the default image name for some -circuit patterns:
-	 * none for the top level, "-alu.adder" for one plain path, and
-	 * "-circuits" for globs or several patterns.
+	 * The suffix of the default image name for the circuits -i draws:
+	 * none for the top level alone, the subcircuit's own name ("-adder"
+	 * for alu.adder) when one subcircuit is drawn (however the patterns
+	 * selected it), and "-circuits" when several are stacked. Names
+	 * nested in different places can collide; -i takes a file name for
+	 * that.
 	 *
-	 * @param patterns The -circuit patterns, possibly none.
+	 * @param drawn The circuits being drawn, at least one.
 	 *
 	 * @return the suffix to put between the circuit name and ".png".
 	 */
-	static String defaultImageSuffix(List<String> patterns) {
+	static String defaultImageSuffix(List<SubcircuitSelector.Selected> drawn) {
 
-		if (patterns.isEmpty()) {
-			return "";
+		if (drawn.size() > 1) {
+			return "-circuits";
 		}
-		if (patterns.size() == 1) {
-			final String only = patterns.get(0);
-			if (only.equals(SubcircuitSelector.TOP)) {
-				return "";
-			}
-			if (SubcircuitGlob.isLiteral(only)) {
-				return "-" + only;
-			}
-		}
-		return "-circuits";
+		final String path = drawn.get(0).path();
+		return path.isEmpty() ? ""
+				: "-" + path.substring(path.lastIndexOf('.') + 1);
 	} // end of defaultImageSuffix method
 
 	/**

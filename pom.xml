@@ -222,6 +222,12 @@
               <!-- Implementation-Title/-Version in the manifest (#36) -->
               <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
             </manifest>
+            <manifestEntries>
+              <!-- FlatLaf loads a native library; without this, JDK 24+
+                   prints a "restricted method" warning on GUI startup
+                   (JEP 472). Honored by `java -jar` only. -->
+              <Enable-Native-Access>ALL-UNNAMED</Enable-Native-Access>
+            </manifestEntries>
           </archive>
         </configuration>
       </plugin>

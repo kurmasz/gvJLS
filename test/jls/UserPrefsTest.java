@@ -110,6 +110,16 @@ class UserPrefsTest {
 		assertEquals(before, JLSInfo.undoStackDepth);
 	}
 
+	@Test
+	void helpFontSizeSurvivesARestartAndGarbageFallsBack() {
+		MemoryPreferences node = new MemoryPreferences();
+		assertEquals(16, new UserPrefs(node).helpFontSize(16));
+		new UserPrefs(node).rememberHelpFontSize(22);
+		assertEquals(22, new UserPrefs(node).helpFontSize(16));
+		node.put("helpFontSize", "huge");
+		assertEquals(16, new UserPrefs(node).helpFontSize(16));
+	}
+
 	/** A hermetic, purely in-memory java.util.prefs node. */
 	private static final class MemoryPreferences
 			extends AbstractPreferences {

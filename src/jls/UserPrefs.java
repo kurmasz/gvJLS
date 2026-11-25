@@ -36,6 +36,8 @@ public final class UserPrefs {
 	private static final String BACKGROUND_KEY = "backgroundColor";
 	/** The key the undo depth override is stored under. */
 	private static final String UNDO_DEPTH_KEY = "undoDepth";
+	/** The key the help window's text size is stored under. */
+	private static final String HELP_FONT_KEY = "helpFontSize";
 
 	// the backing node, or null when only the in-memory map is used
 	/** The backing preferences node, or null when only the in-memory map is used. */
@@ -156,6 +158,41 @@ public final class UserPrefs {
 
 		put(UNDO_DEPTH_KEY, Integer.toString(depth));
 	} // end of rememberUndoDepth method
+
+	/**
+	 * Persist the help window's text size.
+	 *
+	 * @param pt The body text size in points.
+	 *
+	 * @jls.testedby jls.UserPrefsTest
+	 */
+	public void rememberHelpFontSize(int pt) {
+
+		put(HELP_FONT_KEY, Integer.toString(pt));
+	} // end of rememberHelpFontSize method
+
+	/**
+	 * The help window's stored text size.
+	 *
+	 * @param fallback The size to use when none (or garbage) is stored.
+	 *
+	 * @return the stored size in points, or the fallback.
+	 *
+	 * @jls.testedby jls.UserPrefsTest
+	 */
+	public int helpFontSize(int fallback) {
+
+		final String value = get(HELP_FONT_KEY);
+		if (value == null) {
+			return fallback;
+		}
+		try {
+			return Integer.parseInt(value);
+		}
+		catch (NumberFormatException ex) {
+			return fallback;
+		}
+	} // end of helpFontSize method
 
 	/**
 	 * The stored value for a key, from the backing node when present,

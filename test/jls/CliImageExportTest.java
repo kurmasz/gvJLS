@@ -313,7 +313,23 @@ class CliImageExportTest {
 		writeNestedCircuit("cpu.jls");
 		final Result r = run("-i", "-circuit", "inner", "cpu.jls");
 		assertEquals(0, r.exit, r.stderr);
+		// the default name is the subcircuit's own name, not its path
 		assertDecodableImage("cpu-inner.png", 0x89, 'P', 'N', 'G');
+		// a dotted path gets the same name
+		Files.delete(tmp.resolve("cpu-inner.png"));
+		final Result d = run("-i", "-circuit", "alu.inner", "cpu.jls");
+		assertEquals(0, d.exit, d.stderr);
+		assertDecodableImage("cpu-inner.png", 0x89, 'P', 'N', 'G');
+	}
+
+	@Test
+	void aGlobThatSelectsOneSubcircuitIsNamedAfterIt() throws Exception {
+		writeNestedCircuit("cpu.jls");
+		final Result r = run("-i", "-circuit", "inn*", "cpu.jls");
+		assertEquals(0, r.exit, r.stderr);
+		assertDecodableImage("cpu-inner.png", 0x89, 'P', 'N', 'G');
+		assertFalse(new File(tmp.toFile(), "cpu-circuits.png").exists(),
+				"one drawn subcircuit should not get the stacked name");
 	}
 
 	@Test
@@ -430,7 +446,8 @@ class CliImageExportTest {
 		assertEquals(0, r.exit, r.stderr);
 		assertTrue(r.stderr.contains("jls: warning: cpu.jls has no subcircuit nope"),
 				r.stderr);
-		assertDecodableImage("cpu-circuits.png", 0x89, 'P', 'N', 'G');
+		// only alu is drawn, so the image is named after it
+		assertDecodableImage("cpu-alu.png", 0x89, 'P', 'N', 'G');
 	}
 
 	@Test
