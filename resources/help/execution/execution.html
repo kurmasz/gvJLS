@@ -68,40 +68,99 @@ a way as to allow the various command line options to be specified.
 Batch mode.
 
 <p>
-<b>-dtime</b>
-Set the simulation time limit.
-The time is a positive integer immediately following <b>-d</b>, e.g.,
--d1000.
+<b>-d time</b>
+Set the simulation time limit, a positive integer, e.g.,
+<code>-d 1000</code>.
 
 <p>
 <b>-h</b>
 Print a short help message.
 
 <p>
-<b>-i imagefile</b>
-Export an image of the circuit and exit (no GUI).
-By default the image is a PNG file named after the circuit file
-(e.g. counter.jls produces counter.png).
-An optional output file name may be given, either attached
-(-icounter.png) or separated (-i counter.png); a name ending in
-.jpg or .jpeg produces a JPEG image instead.
+<b>-i [imagefile]</b>
+Export an image of the circuit then exit (no GUI).
+By default, JLS draws only the top-level circuit and names the image
+after the circuit file: <code>adder16.jls</code> produces
+<code>adder16.png</code>.
+To choose the file name, provide it after the flag, either attached
+(<code>-iadder.png</code>) or as the next argument
+(<code>-i adder.png</code>).
+The name must end in <code>.png</code>, <code>.jpg</code>,
+<code>.jpeg</code>, or <code>.svg</code>, which sets the format.
+JLS uses the ending to tell the image name from the circuit file.
+To draw subcircuits instead of the top level, add <b>-circuit</b>.
 
 <p>
-<b>-sname</b>
-Read JLS <a href=startup.html>start-up</a> file before loading any circuits.
-The name of the file immediately follows the <b>-s</b>, e.g.,
--sparameters.
-Any legal file name not containing spaces is allowed.
+<b>-circuit pattern</b> (or <b>-circuits pattern</b>)
+With <b>-i</b>, draw the subcircuits that match <i>pattern</i> instead of
+the top level (see <a href="#patterns">Subcircuit Names and Patterns</a>).
+You may repeat the flag; JLS draws each subcircuit that matches any of
+the patterns, once.
+A single match is drawn alone, like the top level.
+Several matches are stacked top to bottom in one image, in the order
+<b>-list-subcircuits</b> prints them, each captioned with its path
+(the top level with the circuit's name).
 
 <p>
-<b>-tname</b>
+Unless you give <b>-i</b> a file name, JLS names the image after what it
+draws.
+For the circuit <code>adder16.jls</code> (shown under
+<a href="#patterns">Subcircuit Names and Patterns</a>), the default
+names are:
+<ul>
+  <li><code>adder16.png</code> for the top level alone;</li>
+  <li><code>adder16-bit0.png</code> for one subcircuit, such as
+  <code>group0.bit0</code>;</li>
+  <li><code>adder16-circuits.png</code> for several stacked
+  subcircuits.</li>
+</ul>
+A single subcircuit's image is named after the subcircuit itself, not
+its path.
+Two different subcircuits with the same name therefore get the same
+file name, and the second image replaces the first.
+To keep both, provide <b>-i</b> a file name.
+
+<p>
+For example:
+<ul>
+<li><code>-i -circuit group0.bit0 adder16.jls</code> draws one 1-bit
+adder and saves it as <code>adder16-bit0.png</code>.
+<li><code>-i fulladder.png -circuit group0.bit0 adder16.jls</code>
+saves the same drawing as <code>fulladder.png</code>.
+<li><code>-i -circuit . -circuit group0 -circuit group0.bit0 adder16.jls</code>
+draws one circuit from each level&mdash;the 16-bit adder, a 4-bit
+group, and a 1-bit adder&mdash;stacked in
+<code>adder16-circuits.png</code>.
+<li><code>-i -circuit bit0 adder16.jls</code> is a common mistake:
+<code>bit0</code> has no dot, so it matches all four <code>bit0</code>s,
+and JLS stacks four copies of the same drawing in
+<code>adder16-circuits.png</code>.
+</ul>
+
+<p>
+<b>-list-subcircuits [pattern]</b>
+Print the circuit's subcircuits as a tree and exit (no GUI).
+Use it to find the paths to give to <b>-circuit</b>.
+With a <a href="#patterns">pattern</a>, it prints only the matching
+subcircuits and the subcircuits that contain them, so you can check a
+pattern before giving it to <b>-circuit</b>.
+(The top line always prints, whether or not the pattern selects the top
+level.)
+It cannot be combined with <code>-b</code>, <code>-i</code>,
+<code>-export</code>, <code>-savetext</code>, <code>-p</code>, or
+<code>-v</code>.
+
+<p>
+<b>-s file</b>
+Read JLS <a href=startup.html>start-up</a> file before loading any circuits,
+e.g., <code>-s parameters</code>.
+
+<p>
+<b>-t file</b>
 Read JLS <a href=../elements/other/sigformat.html>test input</a>
-file just before simulating a circuit.
+file just before simulating a circuit, e.g., <code>-t inputsigs</code>.
 The file will be read every time the simulator is started, so changes
 made to the file will affect a subsequent simulation run.
-The name of the file immediately follows the <b>-t</b>, e.g.,
--tinputsigs.
-Any legal file name not containing spaces is allowed.
 
 <p>
 <b>-pprinter</b>
@@ -123,7 +182,147 @@ When used with batch mode, writes the value-change history of all
 watched signals to the named file in industry-standard VCD format
 (IEEE 1364), viewable in waveform viewers such as GTKWave or Surfer.
 The exact format, and the rest of the batch input/output contract, is
-specified in docs/batch-interface.md in the source distribution.
+specified in <code>docs/batch-interface.md</code> in the source distribution.
+
+<p>
+<b>-export file</b>
+Export the circuit as Verilog-2005 or VHDL and exit.
+The file's extension chooses the language: <code>.v</code> for Verilog,
+<code>.vhd</code> or <code>.vhdl</code> for VHDL.
+
+<p>
+<b>-board name</b> and <b>-pins file</b>
+Use these two flags together with <b>-export</b> to also write a
+pin-constraint file (<code>.pcf</code>) for the named FPGA board.
+The pins file says which board pin each port connects to.
+Each line has the form <code>port pin</code>, or
+<code>port[bit] pin</code> for one bit of a multi-bit port.
+Lines starting with <code>#</code> are comments.
+
+<p>
+<b>-savetext file</b>
+Save a copy of the circuit to the named <code>.jls</code> file as plain,
+uncompressed text, and exit.
+
+<p>
+Any flag that takes a value accepts it attached (<code>-d10000</code>)
+or as the next argument (<code>-d 10000</code>).
+An argument of <code>--</code> ends the flags, so a file name after it
+may begin with <code>-</code>.
+
+<h2><a name="patterns">Subcircuit Names and Patterns</a></h2>
+
+<p>
+<b>-circuit</b> and <b>-list-subcircuits</b> identify a subcircuit by
+its <i>path</i>: the names of the subcircuits that contain it, then its
+own name, separated by dots.
+For example, here is the output of <code>-list-subcircuits</code> for a
+16-bit adder, <code>adder16.jls</code>, built from four 4-bit adders
+(<code>group0</code> to <code>group3</code>), each built from four 1-bit
+adders (<code>bit0</code> to <code>bit3</code>):
+
+<pre>
+    . (adder16)
+    |-- group0
+    |   |-- bit0
+    |   |-- bit1
+    |   |-- bit2
+    |   `-- bit3
+    |-- group1
+    |   |-- bit0
+    |   |-- bit1
+    |   |-- bit2
+    |   `-- bit3
+    |-- group2
+    |   |-- bit0
+    |   |-- bit1
+    |   |-- bit2
+    |   `-- bit3
+    `-- group3
+        |-- bit0
+        |-- bit1
+        |-- bit2
+        `-- bit3
+</pre>
+
+The first line, <code>.</code>, represents the top level.
+Every group is an instance of the same 4-bit adder, so the names inside the groups
+repeat: there are four subcircuits named <code>bit0</code>.
+Their paths distinguish them: <code>group0.bit0</code>,
+<code>group1.bit0</code>, etc.
+
+<p>
+The argument to <b>-circuit</b> and <b>-list-subcircuits</b> is a
+<i>pattern</i>.
+A full path, such as <code>group2.bit0</code>, selects one subcircuit.
+A name with no dot, such as <code>bit0</code>, selects that name
+wherever it appears.
+Wildcards select more: <code>*</code> matches any characters (or none)
+within a name, so <code>group*</code> matches all four groups.
+Only <code>**</code> matches across a dot.
+The table shows what some patterns select in <code>adder16.jls</code>.
+
+<p>
+<table border="1" cellpadding="4">
+<tr><th>Pattern</th><th>Meaning</th><th>Selects in adder16.jls</th></tr>
+<tr><td nowrap><code>bit0</code></td>
+    <td>A name without a dot matches that name at any depth.</td>
+    <td><code>group0.bit0</code>, <code>group1.bit0</code>,
+        <code>group2.bit0</code>, and <code>group3.bit0</code></td></tr>
+<tr><td nowrap><code>group2.bit0</code></td>
+    <td>A pattern with a dot must match the whole path, starting at the
+        top level.</td>
+    <td>only <code>group2.bit0</code></td></tr>
+<tr><td nowrap><code>.</code></td>
+    <td>The top level.</td>
+    <td>the top level</td></tr>
+<tr><td nowrap><code>group2.*</code></td>
+    <td>Everything directly inside <code>group2</code>.</td>
+    <td><code>group2.bit0</code> through <code>group2.bit3</code></td></tr>
+<tr><td nowrap><code>*</code></td>
+    <td>A name without a dot matches at any depth, so <code>*</code>
+        matches every subcircuit.</td>
+    <td>all 20 subcircuits, but not the top level</td></tr>
+<tr><td nowrap><code>**</code></td>
+    <td>The top level and every subcircuit.</td>
+    <td>all 21 circuits: the top level and its 20 subcircuits</td></tr>
+</table>
+
+<p>
+<code>**</code> also works inside a path, where it matches any number of
+levels: <code>group2.**</code> selects everything inside
+<code>group2</code>, however deep.
+
+<p>
+Within a name you can also use <code>?</code> (exactly one character),
+<code>[0-3]</code> (one character from a set), <code>[!0]</code> (one
+character not in the set), and <code>{group0,group3}</code> (any one of
+the alternatives).
+
+<p>
+A pattern must match a whole name, including case: <code>group</code>
+does not match <code>group0</code>, and neither does
+<code>Group0</code>.
+Only <code>.</code> and <code>**</code> select the top level.
+
+<p>
+Put quotes around patterns.
+Otherwise the command shell may treat them as file-name wildcards and
+expand them before JLS sees them.
+For example:
+
+<pre>
+    java -jar jls-&lt;version&gt;.jar -i -circuits '**' adder16.jls
+    java -jar jls-&lt;version&gt;.jar -list-subcircuits 'group2.*' adder16.jls
+</pre>
+
+The first command draws the top level and all 20 subcircuits, stacked in
+<code>adder16-circuits.png</code>.
+The second lists the four bits inside <code>group2</code>.
+These examples use single quotes, which work on macOS, Linux, and in
+PowerShell.
+In the Windows Command Prompt, use double quotes instead:
+<code>"**"</code>.
 
 </body>
 
